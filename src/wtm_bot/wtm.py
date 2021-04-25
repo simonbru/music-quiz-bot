@@ -86,7 +86,7 @@ class TmdbClient:
 class WtmSession:
     def __init__(self, tmdb_token):
         self.client = httpx.AsyncClient()
-        self.tmdb_client = TmdbClient(tmdb_token)
+        # self.tmdb_client = TmdbClient(tmdb_token)
 
     async def login(self, username, password):
         login_url = wtm_url("/user/login")
@@ -170,9 +170,10 @@ class WtmSession:
                         title_match.group("title").strip()
                     )
                     year = int(year_match.group(1))
-                    alternative_titles = await self.tmdb_client.get_alternative_titles(
-                        title, year
-                    ) - {title}
+                    # alternative_titles = await self.tmdb_client.get_alternative_titles(
+                    #     title, year
+                    # ) - {title}
+                    alternative_titles = {title}
 
             r = await self.client.get(image, headers={"Referer": str(response.url)})
             shot = Shot(

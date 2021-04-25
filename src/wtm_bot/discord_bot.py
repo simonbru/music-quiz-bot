@@ -531,7 +531,7 @@ class DiscordUi:
 
 
 class WtmClient(discord.Client):
-    def __init__(self, wtm_user, wtm_password, tmdb_token):
+    def __init__(self, wtm_user, wtm_password, tmdb_token=None):
         super().__init__()
         self.uis = {}
         self.wtm_user = wtm_user
@@ -733,7 +733,7 @@ class WtmClient(discord.Client):
 def main():
     env_vars = {
         var_name: os.environ.get(var_name)
-        for var_name in ("WTM_USER", "WTM_PASSWORD", "DISCORD_TOKEN", "TMDB_TOKEN")
+        for var_name in ("WTM_USER", "WTM_PASSWORD", "DISCORD_TOKEN")
     }
     missing_vars = {var_name for var_name, value in env_vars.items() if not value}
 
@@ -747,7 +747,6 @@ def main():
     client = WtmClient(
         wtm_user=env_vars["WTM_USER"],
         wtm_password=env_vars["WTM_PASSWORD"],
-        tmdb_token=env_vars["TMDB_TOKEN"],
     )
 
     client.run(env_vars["DISCORD_TOKEN"])
