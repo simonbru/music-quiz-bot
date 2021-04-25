@@ -15,12 +15,13 @@ from dataclasses import dataclass
 from typing import Dict, List
 
 import discord
+from discord.player import FFmpegPCMAudio
 
 from wtm_bot.table import Heading, Justify, Table
 from wtm_bot.wtm import Difficulty, WtmSession
 
-NB_SHOTS = 12
-GUESS_TIME_SECONDS = 30
+NB_SHOTS = 3
+GUESS_TIME_SECONDS = 10
 MAX_COMBO = 2
 STATS_DIR = os.environ.get(
     "STATS_DIR", os.path.join(os.path.abspath(os.path.dirname(__file__)), "stats")
@@ -392,6 +393,7 @@ class Game:
                 self.status = GameStatus.IDLE
                 await self.emit_signal("shot_timeout")
 
+            await self.emit_signal("shot_end")
             # Sleep a bit after the solution was shown to let people cool down
             await asyncio.sleep(3)
 
@@ -433,8 +435,9 @@ class Game:
 
 
 class DiscordUi:
-    def __init__(self, channel, game):
+    def __init__(self, channel, voice_client, game):
         self.channel = channel
+        self.voice_client = voice_client
         self.game = game
         self.shot_message = None
 
@@ -442,6 +445,7 @@ class DiscordUi:
         self.game.subscribe_to_signal("game_finished", self.game_finished)
         self.game.subscribe_to_signal("shot_timeout", self.shot_timeout)
         self.game.subscribe_to_signal("new_shot", self.new_shot)
+        self.game.subscribe_to_signal("shot_end", self.shot_end)
         self.game.subscribe_to_signal("correct_guess", self.correct_guess)
         self.game.subscribe_to_signal("incorrect_guess", self.incorrect_guess)
 
@@ -489,6 +493,11 @@ class DiscordUi:
             files=[discord.File(fp=io.BytesIO(shot.image_data), filename=filename,)],
         )
         await self.shot_message.add_reaction("⏭")
+        audio_source = FFmpegPCMAudio("/tmp/sample.m4a")
+        self.voice_client.play(audio_source)
+
+    async def shot_end(self):
+        self.voice_client.stop()
 
     async def shot_timeout(self):
         await self.channel.send(
@@ -562,21 +571,27 @@ class WtmClient(discord.Client):
             f"Get ready, a new game is about to start in **{difficulty.value}** difficulty! Aaaaaand action! 🎬"
         )
 
-        game = Game(
-            wtm_user=self.wtm_user,
-            wtm_password=self.wtm_password,
-            tmdb_token=self.tmdb_token,
-            difficulty=difficulty,
-        )
-        ui = DiscordUi(channel, game)
-
-        self.uis[channel.id] = ui
-
+        voice_channel = self.get_channel(835834021102747648)
         try:
-            await game.game_loop()
+            voice_client = await voice_channel.connect(timeout=10, reconnect=False)
+            game = Game(
+                wtm_user=self.wtm_user,
+                wtm_password=self.wtm_password,
+                tmdb_token=self.tmdb_token,
+                difficulty=difficulty,
+            )
+            ui = DiscordUi(channel, voice_client, game)
+
+            self.uis[channel.id] = ui
+
+            try:
+                await game.game_loop()
+            finally:
+                logger.debug("Game loop is finished, cleaning up UI")
+                del self.uis[channel.id]
         finally:
-            logger.debug("Game loop is finished, cleaning up UI")
-            del self.uis[channel.id]
+            logger.info("cleaning up voice client")
+            await voice_client.disconnect()
 
     async def show_stats(self, channel):
         try:

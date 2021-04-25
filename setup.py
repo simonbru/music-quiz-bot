@@ -4,7 +4,7 @@ from setuptools import setup
 install_requires = [
     "httpx",
     "beautifulsoup4",
-    "discord.py",
+    "discord.py[voice]",
 ]
 
 setup(
