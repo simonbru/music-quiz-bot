@@ -1,4 +1,5 @@
 /dist
-/src/wtm_bot.egg-info
-/wtm_bot.egg-info
-/src/wtm_bot/stats
+/src/music_quiz_bot.egg-info
+/music_quiz_bot.egg-info
+/src/music_quiz_bot/stats
+__pycache__

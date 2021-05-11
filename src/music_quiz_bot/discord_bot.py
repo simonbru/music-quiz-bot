@@ -16,10 +16,10 @@ from typing import Dict, List
 
 import discord
 
-from wtm_bot.table import Heading, Justify, Table
-from wtm_bot.wtm import Difficulty, WtmSession
+from music_quiz_bot.table import Heading, Justify, Table
+from music_quiz_bot.quiz import MusicQuizSession
 
-NB_SHOTS = 12
+NB_SAMPLES = 12
 GUESS_TIME_SECONDS = 30
 MAX_COMBO = 2
 STATS_DIR = os.environ.get(
@@ -65,7 +65,7 @@ class Stat:
     player_id: str
     player_name: str
     nb_guesses: int
-    nb_shots_played: int
+    nb_samples_played: int
     nb_correct_guesses: int
     nb_skips: int
     nb_aces: int
@@ -79,7 +79,7 @@ class PlayerStat:
     player_id: str
     player_name: str
     nb_guesses: int
-    nb_shots_played: int
+    nb_samples_played: int
     nb_correct_guesses: int
     nb_skips: int
     nb_aces: int
@@ -93,17 +93,17 @@ class PlayerStat:
             player_id=other.player_id,
             player_name=other.player_name,
             nb_guesses=self.nb_guesses + other.nb_guesses,
-            nb_shots_played=self.nb_shots_played + other.nb_shots_played,
+            nb_samples_played=self.nb_samples_played + other.nb_samples_played,
             nb_correct_guesses=self.nb_correct_guesses + other.nb_correct_guesses,
             nb_skips=self.nb_skips + other.nb_skips,
             nb_aces=self.nb_aces + other.nb_aces,
             max_streak=max(self.max_streak, other.max_streak),
             reaction_time=(
-                self.reaction_time * self.nb_shots_played
-                + other.reaction_time * other.nb_shots_played
+                self.reaction_time * self.nb_samples_played
+                + other.reaction_time * other.nb_samples_played
             )
-            / (self.nb_shots_played + other.nb_shots_played)
-            if self.nb_shots_played + other.nb_shots_played > 0
+            / (self.nb_samples_played + other.nb_samples_played)
+            if self.nb_samples_played + other.nb_samples_played > 0
             else 0,
             precision=(
                 self.precision * self.nb_correct_guesses
@@ -130,7 +130,6 @@ class PlayerStat:
 
 @dataclasses.dataclass()
 class GameStats:
-    difficulty: Difficulty
     stats: Dict[int, Stat] = dataclasses.field(default_factory=dict)
     started_at: datetime.datetime = dataclasses.field(
         default_factory=lambda: datetime.datetime.utcnow()
@@ -144,7 +143,7 @@ class GameStats:
                 player_id=player_id,
                 player_name=player_name,
                 nb_guesses=0,
-                nb_shots_played=0,
+                nb_samples_played=0,
                 nb_correct_guesses=0,
                 reaction_time=0,
                 nb_skips=0,
@@ -171,10 +170,10 @@ class GameStats:
         self.stats[player_id] = dataclasses.replace(
             stat,
             nb_guesses=stat.nb_guesses + 1,
-            nb_shots_played=stat.nb_shots_played + (0 if reaction_time is None else 1),
+            nb_samples_played=stat.nb_samples_played + (0 if reaction_time is None else 1),
             nb_correct_guesses=stat.nb_correct_guesses + (1 if is_correct else 0),
-            reaction_time=(stat.reaction_time * stat.nb_shots_played + reaction_time)
-            / (stat.nb_shots_played + 1)
+            reaction_time=(stat.reaction_time * stat.nb_samples_played + reaction_time)
+            / (stat.nb_samples_played + 1)
             if reaction_time is not None
             else stat.reaction_time,
             nb_aces=stat.nb_aces + (1 if is_ace else 0),
@@ -199,7 +198,6 @@ class GameStats:
                     int(player_id): Stat(**obj)
                     for player_id, obj in stat["stats"].items()
                 },
-                difficulty=Difficulty(stat["difficulty"]),
             )
             for stat in stats_list
         ]
@@ -208,7 +206,6 @@ class GameStats:
 
     def asdict(self):
         return {
-            "difficulty": self.difficulty.value,
             "started_at": self.started_at.timestamp(),
             "stats": {
                 player_id: dataclasses.asdict(stat)
@@ -223,15 +220,6 @@ def get_stats_file_path(game_id: int) -> str:
 
 def _fuzzy_compare_str(str1, str2):
     str1, str2 = str1.lower(), str2.lower()
-
-    # I mean come on, no one ever knows the name of the episode
-    if (
-        "harry potter" in str1
-        and "harry fucking potter" in str2
-        or "indiana jones" in str1
-        and "indiana fucking jones" in str2
-    ):
-        return 1
 
     str1_parts = str1.split(":") + [str1]
     max_ratio = max(
@@ -256,8 +244,8 @@ def fuzzy_compare(solutions, guess):
 
 
 class Round:
-    def __init__(self, shot):
-        self.shot = shot
+    def __init__(self, sample):
+        self.sample = sample
         self.started_at = None
         self.guessers = set()
         self.skip_votes = set()
@@ -272,7 +260,8 @@ class Round:
 
     def guess(self, player_id, guess):
         fuzzy_result = fuzzy_compare(
-            set([self.shot.movie_title]) | self.shot.movie_alternative_titles, guess,
+            # TODO: use relevant sample fields
+            {self.sample.title}, guess,
         )
         self.guessers.add(player_id)
 
@@ -280,17 +269,13 @@ class Round:
 
 
 class Game:
-    def __init__(self, *, wtm_user, wtm_password, tmdb_token, difficulty):
-        self.wtm_user = wtm_user
-        self.wtm_password = wtm_password
-
-        self.difficulty = difficulty
+    def __init__(self):
         self.scores = defaultdict(int)
-        self.stats = GameStats(difficulty=difficulty)
-        self.wtm_session = WtmSession(tmdb_token)
+        self.stats = GameStats()
+        self.quiz_session = MusicQuizSession()
         self.status = GameStatus.IDLE
         self.guess_timer = None
-        self.shots_queue = asyncio.Queue()
+        self.samples_queue = asyncio.Queue()
         self.signal_subscribers = defaultdict(list)
         self.current_round = None
         self.current_combo = None
@@ -332,7 +317,7 @@ class Game:
             await self.emit_signal(
                 "correct_guess",
                 player=player_name,
-                movie_title=fuzzy_result.match,
+                track_title=fuzzy_result.match,
                 **kwargs,
             )
             self.guess_timer.cancel()
@@ -354,8 +339,6 @@ class Game:
 
     async def game_loop(self):
         self.status = GameStatus.LOADING
-        await self.wtm_session.login(self.wtm_user, self.wtm_password)
-        await self.wtm_session.set_difficulty(self.difficulty)
         self.populate_queue_task = asyncio.create_task(self.populate_queue())
         guess_loop_task = asyncio.create_task(self.guess_loop())
 
@@ -363,23 +346,23 @@ class Game:
         await guess_loop_task
 
     async def populate_queue(self):
-        for i in range(NB_SHOTS):
-            logging.debug("Fetching shot...")
-            shot = await self.wtm_session.get_random_shot(require_solution=True)
-            logging.debug("Got shot, putting it in the queue")
-            await self.shots_queue.put(shot)
+        for i in range(NB_SAMPLES):
+            logging.debug("Fetching sample...")
+            sample = await self.quiz_session.get_random_sample(require_solution=True)
+            logging.debug("Got sample, putting it in the queue")
+            await self.samples_queue.put(sample)
 
     async def guess_loop(self):
         logging.info("Starting guess loop")
-        shot_number = 1
-        while not self.populate_queue_task.done() or self.shots_queue.qsize() > 0:
-            logging.debug("Getting shot from queue")
-            shot = await self.shots_queue.get()
-            logging.debug("Got shot from queue")
-            logging.debug("Movie title: %s", shot.movie_title)
+        sample_number = 1
+        while not self.populate_queue_task.done() or self.samples_queue.qsize() > 0:
+            logging.debug("Getting sample from queue")
+            sample = await self.samples_queue.get()
+            logging.debug("Got sample from queue")
+            logging.debug("Track title: %s", sample.track_title)
 
-            self.current_round = Round(shot)
-            await self.emit_signal("new_shot", shot_number=shot_number)
+            self.current_round = Round(sample)
+            await self.emit_signal("new_sample", sample_number=sample_number)
             self.guess_timer = self.current_round.start()
             self.status = GameStatus.WAITING_FOR_GUESSES
 
@@ -390,17 +373,17 @@ class Game:
             else:
                 self.current_combo = None
                 self.status = GameStatus.IDLE
-                await self.emit_signal("shot_timeout")
+                await self.emit_signal("sample_timeout")
 
             # Sleep a bit after the solution was shown to let people cool down
             await asyncio.sleep(3)
 
-            shot_number += 1
+            sample_number += 1
 
         await self.emit_signal("game_finished")
 
     async def skip(self):
-        await self.emit_signal("shot_skipped")
+        await self.emit_signal("sample_skipped")
         self.guess_timer.cancel()
 
     async def emit_signal(self, signal_name, *args, **kwargs):
@@ -436,12 +419,12 @@ class DiscordUi:
     def __init__(self, channel, game):
         self.channel = channel
         self.game = game
-        self.shot_message = None
+        self.sample_message = None
 
-        self.game.subscribe_to_signal("shot_skipped", self.shot_skipped)
+        self.game.subscribe_to_signal("sample_skipped", self.sample_skipped)
         self.game.subscribe_to_signal("game_finished", self.game_finished)
-        self.game.subscribe_to_signal("shot_timeout", self.shot_timeout)
-        self.game.subscribe_to_signal("new_shot", self.new_shot)
+        self.game.subscribe_to_signal("sample_timeout", self.sample_timeout)
+        self.game.subscribe_to_signal("new_sample", self.new_sample)
         self.game.subscribe_to_signal("correct_guess", self.correct_guess)
         self.game.subscribe_to_signal("incorrect_guess", self.incorrect_guess)
 
@@ -455,11 +438,11 @@ class DiscordUi:
             for symbol, (name, score) in zip(["🥇", "🥈", "🥉"], ranking)
         ]
 
-    async def correct_guess(self, player, message, movie_title):
+    async def correct_guess(self, player, message, track_title):
         congrats_messages = ["yay", "correct", "nice", "good job", "👏", "you rock"]
         congrats_message = random.choice(congrats_messages)
         embed = discord.Embed(
-            title=f"It was **{movie_title}** ({self.game.current_round.shot.movie_year})"
+            title=f"It was **{track_title}**"
         )
         embed.add_field(
             name="**Leaderboard**", value="\n".join(self.get_ranking(self.game.scores)),
@@ -477,24 +460,25 @@ class DiscordUi:
     async def incorrect_guess(self, player, guess, message):
         await message.add_reaction("❌")
 
-    async def new_shot(self, shot_number):
-        shot = self.game.current_round.shot
-        filename = shot.image_url[shot.image_url.rfind("/") :]
+    async def new_sample(self, sample_number):
+        sample = self.game.current_round.sample
+        filename = sample.image_url[sample.image_url.rfind("/") :]
         embed = discord.Embed(
-            title="Guess the movie! ⬆", description="To skip it, react with ⏭.",
+            title="Guess the track and artist! ⬆", description="To skip it, react with ⏭.",
         )
-        embed.set_footer(text=f"{shot_number} / {NB_SHOTS}")
-        self.shot_message = await self.channel.send(
+        embed.set_footer(text=f"{sample_number} / {NB_SAMPLES}")
+        self.sample_message = await self.channel.send(
             embed=embed,
-            files=[discord.File(fp=io.BytesIO(shot.image_data), filename=filename,)],
+            files=[discord.File(fp=io.BytesIO(sample.image_data), filename=filename,)],
         )
-        await self.shot_message.add_reaction("⏭")
+        await self.sample_message.add_reaction("⏭")
 
-    async def shot_timeout(self):
+    async def sample_timeout(self):
         await self.channel.send(
             embed=discord.Embed(
                 title="Time’s up! ⌛",
-                description=f"The movie was **{self.game.current_round.shot.movie_title}** ({self.game.current_round.shot.movie_year}).",
+                # TODO: Set/use the correct sample field
+                description=f"The track was **{self.game.current_round.sample.track_title}**.",
             )
         )
 
@@ -503,11 +487,7 @@ class DiscordUi:
         embed = discord.Embed(
             title="Ranking", description=ranking if self.game.scores else "No scores!"
         )
-        embed.add_field(
-            name="About this quiz",
-            value="Images courtesy of https://whatthemovie.com, go there to keep guessing!",
-        )
-        await self.channel.send("The movie quiz is finished!", embed=embed)
+        await self.channel.send("The music quiz is finished!", embed=embed)
 
         try:
             existing_stats = GameStats.load(get_stats_file_path(self.channel.id))
@@ -522,21 +502,18 @@ class DiscordUi:
         with open(get_stats_file_path(self.channel.id), "w") as f:
             f.write(json.dumps([stat.asdict() for stat in stats]))
 
-    async def shot_skipped(self):
+    async def sample_skipped(self):
         embed = discord.Embed(
-            title="Shot skipped",
-            description=f"The movie was **{self.game.current_round.shot.movie_title}** ({self.game.current_round.shot.movie_year}).",
+            title="Sample skipped",
+            description=f"The track was **{self.game.current_round.sample.track_title}**.",
         )
         await self.channel.send(embed=embed)
 
 
-class WtmClient(discord.Client):
-    def __init__(self, wtm_user, wtm_password, tmdb_token):
+class QuizClient(discord.Client):
+    def __init__(self):
         super().__init__()
         self.uis = {}
-        self.wtm_user = wtm_user
-        self.wtm_password = wtm_password
-        self.tmdb_token = tmdb_token
 
     def get_game(self, channel_id):
         return self.uis[channel_id].game
@@ -544,7 +521,7 @@ class WtmClient(discord.Client):
     async def on_ready(self):
         logger.info("Logged in as %s", self.user)
 
-    async def start_game(self, channel, difficulty):
+    async def start_game(self, channel):
         try:
             game = self.get_game(channel.id)
         except KeyError:
@@ -559,15 +536,10 @@ class WtmClient(discord.Client):
             return
 
         await channel.send(
-            f"Get ready, a new game is about to start in **{difficulty.value}** difficulty! Aaaaaand action! 🎬"
+            f"Get ready, a new game is about to start!"
         )
 
-        game = Game(
-            wtm_user=self.wtm_user,
-            wtm_password=self.wtm_password,
-            tmdb_token=self.tmdb_token,
-            difficulty=difficulty,
-        )
+        game = Game()
         ui = DiscordUi(channel, game)
 
         self.uis[channel.id] = ui
@@ -583,7 +555,7 @@ class WtmClient(discord.Client):
             game_stats = GameStats.load(get_stats_file_path(channel.id))
         except FileNotFoundError:
             await channel.send(
-                "No games played yet. Start a game with `@WhatTheMovie start`!"
+                "No games played yet. Start a game with `@MusicQuiz start`!"
             )
             return
 
@@ -608,7 +580,7 @@ class WtmClient(discord.Client):
                         player_id=stat.player_id,
                         player_name=stat.player_name,
                         nb_guesses=stat.nb_guesses,
-                        nb_shots_played=stat.nb_shots_played,
+                        nb_samples_played=stat.nb_samples_played,
                         nb_correct_guesses=stat.nb_correct_guesses,
                         nb_skips=stat.nb_skips,
                         nb_aces=stat.nb_aces,
@@ -655,8 +627,8 @@ class WtmClient(discord.Client):
 
         logger.debug("Got reaction %s", reaction.emoji)
         if (
-            ui.shot_message
-            and ui.shot_message.id == reaction.message.id
+            ui.sample_message
+            and ui.sample_message.id == reaction.message.id
             and reaction.emoji == "⏭"
         ):
             await ui.game.vote_skip(player_id=user.id, player_name=user.name)
@@ -681,21 +653,7 @@ class WtmClient(discord.Client):
             and command.type == CommandType.START
             and (not game or game.status == GameStatus.IDLE)
         ):
-            if command.args:
-                try:
-                    difficulty = Difficulty(command.args[0])
-                except ValueError:
-                    await message.channel.send(
-                        "Please select a valid difficulty: "
-                        + ", ".join(
-                            [f"**{difficulty.value}**" for difficulty in Difficulty]
-                        )
-                    )
-                    return
-            else:
-                difficulty = Difficulty.EASY
-
-            await self.start_game(message.channel, difficulty)
+            await self.start_game(message.channel)
         elif command and command.type == CommandType.HELP:
             await message.channel.send(
                 "Available commands are: start [easy|medium|hard]."
@@ -733,7 +691,7 @@ class WtmClient(discord.Client):
 def main():
     env_vars = {
         var_name: os.environ.get(var_name)
-        for var_name in ("WTM_USER", "WTM_PASSWORD", "DISCORD_TOKEN", "TMDB_TOKEN")
+        for var_name in ("DISCORD_TOKEN",)
     }
     missing_vars = {var_name for var_name, value in env_vars.items() if not value}
 
@@ -744,11 +702,7 @@ def main():
         )
         sys.exit(1)
 
-    client = WtmClient(
-        wtm_user=env_vars["WTM_USER"],
-        wtm_password=env_vars["WTM_PASSWORD"],
-        tmdb_token=env_vars["TMDB_TOKEN"],
-    )
+    client = QuizClient()
 
     client.run(env_vars["DISCORD_TOKEN"])
 

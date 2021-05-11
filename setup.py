@@ -3,24 +3,23 @@ from setuptools import setup
 
 install_requires = [
     "httpx",
-    "beautifulsoup4",
     "discord.py",
 ]
 
 setup(
-    name="wtm_bot",
+    name="music_quiz_bot",
     version="1.0",
-    packages=["wtm_bot"],
+    packages=["music_quiz_bot"],
     package_dir={"": "src"},
-    description="Movie quiz Discord bot, based on whatthemovie.com.",
+    description="Music quiz Discord bot using data from Spotify.",
     long_description="",
-    author="Sylvain Fankhauser",
+    author="Sylvain Fankhauser, Simon Brulhart",
     author_email="sephi@fhtagn.top",
-    url="https://github.com/sephii/wtm_bot",
+    url="https://github.com/simonbru/music-quiz-bot",
     install_requires=install_requires,
     license="mit",
     include_package_data=False,
     python_requires=">=3.7",
-    entry_points={"console_scripts": "wtm-bot = wtm_bot.discord_bot:main"},
+    entry_points={"console_scripts": "music-quiz-bot = music_quiz_bot.discord_bot:main"},
     classifiers=["License :: OSI Approved :: MIT License"],
 )
